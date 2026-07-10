@@ -10,6 +10,17 @@ services:
     networks:
       - carbon-calc
 
+  app:
+    build: .
+    ports:
+      - "8085:8085"
+    environment:
+      SPRING_DATA_MONGODB_URI: "mongodb://mongo:27017/carbon-calc"
+    depends_on:
+      - mongo
+    networks:
+      - carbon-calc
+
 networks:
   carbon-calc:
     driver: bridge

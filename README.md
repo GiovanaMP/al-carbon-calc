@@ -1,110 +1,102 @@
 # AL Carbon Calculator
 
-## Description
+Backend for a carbon footprint calculator, built with Spring Boot and MongoDB. Implements the 3 endpoints defined in `OpenRestController`, with JUnit test coverage and Docker-based setup.
 
-Create the backend for a carbon calculator, using Java, Spring Boot and MongoDB.
+## What it does
 
-There are only 3 endpoints that need to be implemented:
+- **`POST /open/start-calc`** — receives basic user info (`name`, `email`, `phoneNumber`, `uf`), all mandatory, creates a new calculation and returns its `id`.
+- **`PUT /open/info`** — receives consumption data (energy, transportation, solid waste) tied to an `id`. Calling it again for the same `id` fully overwrites the previous data.
+- **`GET /open/result/{id}`** — returns the calculated carbon footprint for that `id`.
 
-### [POST] /open/start-calc
+Emission factors (per state, per transportation type, recyclable/non-recyclable) are pre-loaded into MongoDB via `init-mongo.js` and read from the database at calculation time — not hardcoded.
 
-Starts the calculation process. Receives the user basic info and stores a new calculation in the database. Returns the
-calculation's id
-to be used in the following endpoints. For this endpoint, every parameter is mandatory (name, email, phoneNumber and
-UF).
+## Architecture
 
-### [PUT] /open/info
+```
+src/main/java/br/com/actionlabs/carboncalc/
+├── CarbonCalculatorApplication.java
+├── config/                          # security, Swagger/OpenAPI
+├── dto/                              # request/response DTOs
+├── enums/
+│   └── TransportationType.java       # CAR, MOTORCYCLE, PUBLIC_TRANSPORT, BICYCLE
+├── model/                            # pre-loaded emission factors
+│   ├── EnergyEmissionFactor.java
+│   ├── TransportationEmissionFactor.java
+│   └── SolidWasteEmissionFactor.java
+├── repository/                       # repositories for the emission factors above
+├── rest/
+│   ├── OpenRestController.java       # the 3 endpoints
+│   └── StatusRestController.java     # health check
+└── calculation/                      # calculation feature, package-by-feature
+    ├── Calculation.java               # MongoDB document for a calculation
+    ├── TransportationEntry.java       # embedded item (type + monthly distance)
+    ├── CalculationRepository.java
+    ├── CalculationService.java        # start-calc / info / result + the 3 formulas
+    ├── CalculationNotFoundException.java
+    └── CalculationExceptionHandler.java
+```
 
-Receives information needed to calculate the user's carbon emission (energy consumption, transportation and solid waste
-production) and stores it in the database.
+The calculation feature is isolated in its own package (`calculation/`) instead of being spread across the existing layer-based packages (`model/`, `repository/`) — keeps the new logic cohesive and easy to review on its own.
 
-Please consider `recyclePercentage` as a double from 0 to 1.0, representing the percentage of recyclable solid waste.
+## Business rules
 
-If this endpoint is called a second time for the same id, all its parameters must be overwritten.
+- **Energy**: `energy = energyConsumption * EnergyEmissionFactor(uf).factor`
+- **Transportation**: sum, over each item in `transportation`, of `monthlyDistance * TransportationEmissionFactor(type).factor`
+- **Solid waste**: `recyclePercentage` (0 to 1.0) is the recyclable fraction of the total:
+  `solidWaste = solidWasteTotal*recyclePercentage*recyclableFactor + solidWasteTotal*(1-recyclePercentage)*nonRecyclableFactor`
+- **Total**: `total = energy + transportation + solidWaste`
 
-### [GET] /open/result/{id}
+Calling `PUT /open/info` again for the same `id` **overwrites** all previous data (no merge/sum). Calling `GET /open/result/{id}` before any `PUT /open/info` returns 400, and an unknown `id` returns 404 on any of the 3 endpoints.
 
-Returns the carbon footprint for the calculation with the given id.
+## Tech stack
 
-All these endpoints are already defined in the class `OpenRestController`. You should implement the methods in this
-class.
+Spring Boot 3.3.4, Java 17, Gradle (wrapper included), MongoDB, Bean Validation, JUnit 5 + Mockito, Docker / Docker Compose, springdoc-openapi (Swagger UI).
 
-## Calculator logic
+## Running it
 
-There are emission factors already saved in the database for energy consumption (`EnergyEmissionFactor.class`),
-transportation (`TransportationEmissionFactor.class`) and solid waste (`SolidWasteEmissionFactor.class`). These factors
-must be used to calculate the full carbon emission for this user, according to the following formulas:
+### Option A — everything via Docker (no local Java needed)
 
-### Energy consumption
+```bash
+docker compose up --build
+```
 
-The class `EnergyEmissionFactor` contains the emission factors for each brazilian state (UF). The emission follows the
-formula:
+Brings up MongoDB (pre-seeded with emission factors) and the application together. Server at `http://localhost:8085`.
 
-```Carbon emission = energy consumption * emission factor```
+### Option B — only the database in Docker, app running locally
 
-### Transportation
+```bash
+docker compose up mongo
+./gradlew bootRun          # or run CarbonCalculatorApplication from your IDE
+```
 
-The class `TransportationEmissionFactor` contains the emission factors for each type of transportation. The emission
-follows the formula:
+Only requires Java 17 locally (`./gradlew` manages Gradle itself). The app already points to `localhost:27017` by default, no config changes needed.
 
-```Carbon emission = distance * transportation type emission factor```
+### Without Docker
 
-### Solid waste
+1. Install Java 17 and have a reachable MongoDB (local or remote), adjusting `spring.data.mongodb.uri` in `application.yml` if it's not `localhost:27017`.
+2. Seed the emission factors manually: `mongosh <your-uri> init-mongo.js`.
+3. Run `./gradlew bootRun`.
 
-The class `SolidWasteEmissionFactor` contains the emission factors for recyclable and non-recyclable solid waste. The
-emission follows the formula:
+To reset the database (Docker): `docker compose down -v`.
 
-```Carbon emission = solid waste production * emission factor```
+## Testing it
 
-## Technical Notes
+- **Swagger UI**: `http://localhost:8085/swagger-ui.html` — lists the 3 endpoints, with "Try it out" to test directly from the browser.
+- **Automated tests**:
+  ```bash
+  ./gradlew test
+  ```
+- **curl** — full flow:
+  ```bash
+  # 1. open a calculation
+  curl -X POST http://localhost:8085/open/start-calc -H "Content-Type: application/json" \
+    -d '{"name":"Test","email":"test@test.com","phoneNumber":"11999999999","uf":"SP"}'
+  # copy the "id" from the response
 
-### Database
+  # 2. provide consumption data
+  curl -X PUT http://localhost:8085/open/info -H "Content-Type: application/json" \
+    -d '{"id":"<ID>","energyConsumption":100,"transportation":[{"type":"CAR","monthlyDistance":50}],"solidWasteTotal":20,"recyclePercentage":0.4}'
 
-Run `docker compose up` to start the MongoDB database. The database will be populated with the default collection
-contents defined in the `init-mongo.js` script when first started - all default emission factors are here. These values
-are only for this test and should not be
-considered real values for carbon emissions :smile:
-
-If you need to reset the database to its initial state, you can run `docker compose down -v`, which will erase the
-database and repopulate the initial values in the next start.
-
-### Running the application
-
-You can use your IDE of choice to run the application. The main class is `CarbonCalculatorApplication`. The server will
-run
-on port 8085 (http://localhost:8085).
-
-There is a swagger documentation available on http://localhost:8085/swagger-ui.html.
-
-### Classes already created
-
-We created the classes for the RestController and the DTOs needed to execute its endpoints. If you want to change them,
-please keep the same property names - don't break the defined interface.
-
-We also created 3 basic models and their corresponding Repository interfaces for the carbon emission values that you
-need to use in your implementations. These are the objects pre-populated in the
-database. Feel free to add more methods to the *Repository interfaces as needed.
-
-You will certainly need to create new classes to implement the logic for the endpoints and new models. Feel free to
-organize the code as you see fit.
-
-There are a few implemented classes to check the application's health, security and swagger configs and so on. There's
-probably no need to modify them, but if you think it's necessary, go ahead.
-
-## Additional libs
-
-You are free to add any dependencies you see fit to the project. We want you to implement this challenge the same way
-you deal in any other project: use your best judgment.
-
-## Test evaluation
-
-Your test will be evaluated both on the correctness of the implementation and the quality of the code.
-
-There is no need to host your code anywhere. Publish your code in a public repository and share it with us, so we can
-download
-and run it.
-
-Forks are disabled in this repository, so you should download the code and create a new repository with your
-implementation.
-
-Good luck! :smile:
+  # 3. get the result
+  curl http://localhost:8085/open/result/<ID>
+  ```

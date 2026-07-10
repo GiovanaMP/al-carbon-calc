@@ -1,11 +1,12 @@
 package br.com.actionlabs.carboncalc.dto;
 
+import jakarta.validation.constraints.NotBlank;
 import lombok.Data;
 
 @Data
 public class StartCalcRequestDTO {
-  private String name;
-  private String email;
-  private String uf;
-  private String phoneNumber;
+  @NotBlank private String name;
+  @NotBlank private String email;
+  @NotBlank private String uf;
+  @NotBlank private String phoneNumber;
 }
