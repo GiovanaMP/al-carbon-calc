@@ -1,2 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Gradle wrapper must keep LF endings, or it breaks in Linux containers (Docker)
+gradlew text eol=lf
